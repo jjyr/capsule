@@ -21,15 +21,23 @@ jobs:
 
     steps:
     - uses: actions/checkout@v1
-    - name: Set env
+    - name: Set RELEASE_VERSION
       run: echo ::set-env name=RELEASE_VERSION::${GITHUB_REF#refs/*/}
+    - name: Set PKG_NAME
+      run: echo ::set-env name=PKG_NAME::capsule_${{ env.RELEASE_VERSION }}_${{ matrix.suffix }}
     - name: Build
       run: cargo build --release --locked
+    - name: Import signing key
+      run: gpg --import dev-tools/signing-secret.asc
+    - name: Sign
+      env:
+        GPG_SIGNER: tester
+      run: dev-tools/package.sh target/release/${{ matrix.artifact_name }}
     - name: Upload binaries to release
       uses: svenstaro/upload-release-action@v1-release
       with:
         repo_token: ${{ secrets.GITHUB_TOKEN }}
-        file: target/release/${{ matrix.artifact_name }}
-        asset_name: capsule_${{ env.RELEASE_VERSION }}_${{ matrix.suffix }}
+        file: releases/*
         tag: ${{ github.ref }}
+        file_glob: true
 
