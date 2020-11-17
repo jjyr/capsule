@@ -8,6 +8,7 @@ pub mod project_context;
 pub mod recipe;
 pub mod signal;
 pub mod tester;
+pub mod tool;
 pub mod util;
 pub mod version;
 pub mod wallet;

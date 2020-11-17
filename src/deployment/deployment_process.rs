@@ -14,6 +14,7 @@ use ckb_tool::ckb_types::{
     H256,
 };
 use log::{debug, log_enabled, trace, Level::Debug};
+use std::convert::TryInto;
 use std::fs;
 use std::io::Read;
 
@@ -70,7 +71,7 @@ impl DeploymentProcess {
         input_cells: Vec<LiveCell>,
     ) -> Result<TransactionView> {
         trace!("build cell tx with inputs: {:?}", input_cells);
-        let lock: packed::Script = self.config.lock.to_owned().into();
+        let lock: packed::Script = self.config.lock.to_owned().try_into()?;
         let mut inputs_cells = Vec::new();
         for live_cell in input_cells {
             self.wallet
@@ -145,7 +146,7 @@ impl DeploymentProcess {
         }
 
         trace!("build dep group tx with inputs: {:?}", input_cells);
-        let lock: packed::Script = self.config.lock.to_owned().into();
+        let lock: packed::Script = self.config.lock.to_owned().try_into()?;
         let out_points: packed::OutPointVec = dep_group
             .cells
             .iter()

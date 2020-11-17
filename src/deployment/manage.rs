@@ -11,10 +11,11 @@ use std::path::PathBuf;
 
 const CURRENT_SNAPSHOT: &str = "current.json";
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct DeployOption {
     pub migrate: bool,
     pub tx_fee: Capacity,
+    pub output: Option<PathBuf>,
 }
 
 /// Deployment manage
@@ -138,6 +139,17 @@ impl Manage {
             return Err(anyhow!("Nothing to deploy"));
         }
         self.output_deployment_plan(&recipe, &txs, &pre_inputs, &opt);
+
+        // only print the deployment txs
+        if let Some(output_path) = opt.output.as_ref() {
+            let ser_txs: Vec<ckb_tool::ckb_jsonrpc_types::Transaction> =
+                txs.into_iter().map(|tx| tx.data().into()).collect();
+            let content = serde_json::to_string_pretty(&ser_txs)?;
+            fs::write(output_path, content)?;
+            println!("Written deployment transactions to {:?}", output_path);
+            return Ok(());
+        }
+
         if ask_for_confirm("Confirm deployment?")? {
             let txs = process.sign_txs(txs)?;
             let snapshot_path = self.snapshot_recipe(&recipe)?;

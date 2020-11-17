@@ -1,5 +1,6 @@
+use super::Lock;
 use anyhow::{anyhow, Error};
-use ckb_tool::{ckb_jsonrpc_types::Script, ckb_types::H256};
+use ckb_tool::ckb_types::H256;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -55,7 +56,7 @@ pub struct Config {
 // Deployment
 #[derive(Clone, Default, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub struct Deployment {
-    pub lock: Script,
+    pub lock: Lock,
     pub cells: Vec<Cell>,
     #[serde(default)]
     pub dep_groups: Vec<DepGroup>,

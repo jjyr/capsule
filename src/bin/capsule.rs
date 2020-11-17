@@ -7,7 +7,7 @@ use std::str::FromStr;
 
 use anyhow::{anyhow, Result};
 use ckb_capsule::checker::Checker;
-use ckb_capsule::config::{Contract, TemplateType};
+use ckb_capsule::config::{self, Contract, TemplateType};
 use ckb_capsule::config_manipulate::{append_contract, Document};
 use ckb_capsule::debugger;
 use ckb_capsule::deployment::manage::{DeployOption, Manage as DeployManage};
@@ -18,10 +18,11 @@ use ckb_capsule::project_context::{
 use ckb_capsule::recipe::get_recipe;
 use ckb_capsule::signal;
 use ckb_capsule::tester::Tester;
+use ckb_capsule::tool::multisig;
 use ckb_capsule::version::version_string;
 use ckb_capsule::wallet::cli_types::HumanCapacity;
 use ckb_capsule::wallet::{Address, Wallet, DEFAULT_CKB_CLI_BIN_NAME, DEFAULT_CKB_RPC_URL};
-use ckb_tool::ckb_types::core::Capacity;
+use ckb_tool::ckb_types::{core::Capacity, packed::Transaction, prelude::*};
 
 use clap::{App, AppSettings, Arg, SubCommand};
 
@@ -119,10 +120,36 @@ fn run_cli() -> Result<()> {
                     Arg::with_name("ckb-cli")
                         .long("ckb-cli")
                         .help("CKB cli binary").default_value(DEFAULT_CKB_CLI_BIN_NAME).takes_value(true),
+                    Arg::with_name("output")
+                        .long("output")
+                        .help("write deployment txs as json format to output path").takes_value(true),
                 ]).display_order(6),
         )
+        .subcommand(
+            SubCommand::with_name("tool")
+                .about("Tools for develop or deployment contracts.")
+                .subcommand(
+                    SubCommand::with_name("multisig").about("multisig tools")
+                    .subcommand(SubCommand::with_name("calculate-message").about("calculate message for multisig tx")
+                    .arg(Arg::with_name("config").long("config").short("c").help("multisig tx configuation").takes_value(true).required(true))
+                )
+                    .subcommand(
+                        SubCommand::with_name("add-signatures").about("add signatures on multisig tx").arg(Arg::with_name("output").help("output path").long("output").short("o").takes_value(true))
+                    .arg(Arg::with_name("config").long("config").short("c").help("multisig tx configuation").takes_value(true).required(true))
+                    )
+                    .subcommand(
+                        SubCommand::with_name("new-config").about("generate a multisig tx configuration example").arg(Arg::with_name("output").help("output path").long("output").short("o").takes_value(true))
+                    .arg(Arg::with_name("output").long("output").short("o").help("multisig tx configuation output path").takes_value(true).required(true))
+                    )
+            )
+            .subcommand(SubCommand::with_name("send-tx").about("send raw tx to CKB node").arg(Arg::with_name("tx").long("tx").help("raw transaction path").takes_value(true).required(true)).arg(
+                    Arg::with_name("api")
+                        .long("api")
+                        .help("CKB RPC url").default_value(DEFAULT_CKB_RPC_URL).takes_value(true),
+                    )
+            ).display_order(7))
         .subcommand(SubCommand::with_name("clean").about("Remove contracts targets and binaries").arg(Arg::with_name("name").short("n").long("name").multiple(true).takes_value(true).help("contract name"))
-        .display_order(7))
+        .display_order(8))
         .subcommand(
             SubCommand::with_name("debugger")
             .about("CKB debugger")
@@ -186,7 +213,7 @@ fn run_cli() -> Result<()> {
                     Arg::with_name("only-server").long("only-server").help("Only start debugger server"),
                 ])
             )
-                .display_order(8),
+                .display_order(9),
         );
 
     let signal = signal::Signal::setup();
@@ -195,6 +222,12 @@ fn run_cli() -> Result<()> {
         let mut buf = Vec::new();
         app.write_long_help(&mut buf)?;
         String::from_utf8(buf)?
+    };
+
+    let invalid_command = |command: &str| {
+        eprintln!("unrecognize command '{}'", command);
+        eprintln!("{}", help_str);
+        exit(1)
     };
 
     let matches = app.get_matches();
@@ -335,9 +368,89 @@ fn run_cli() -> Result<()> {
                 Ok(tx_fee) => Capacity::shannons(tx_fee.0),
                 Err(err) => return Err(anyhow!(err)),
             };
-            let opt = DeployOption { migrate, tx_fee };
+            let output = match args.value_of("output") {
+                Some(s) => Some(PathBuf::from_str(s)?),
+                None => None,
+            };
+            let opt = DeployOption {
+                migrate,
+                tx_fee,
+                output,
+            };
             DeployManage::new(migration_dir, context.load_deployment()?).deploy(wallet, opt)?;
         }
+        ("tool", Some(sub_matches)) => match sub_matches.subcommand() {
+            ("multisig", Some(sub_matches)) => match sub_matches.subcommand() {
+                ("calculate-message", Some(args)) => {
+                    let config = args.value_of("config").unwrap();
+                    let config: config::MultisigConfig =
+                        toml::from_str(&fs::read_to_string(config)?)?;
+                    let config::MultisigConfig {
+                        transaction,
+                        lock,
+                        signatures: _,
+                    } = config;
+                    let tx: Transaction = transaction.into();
+                    let message = multisig::calculate_multisig_tx_message(&tx.into_view(), &lock)?;
+                    println!("{}", message);
+                }
+                ("add-signatures", Some(args)) => {
+                    let output_path = args.value_of("output").unwrap();
+                    let config = args.value_of("config").unwrap();
+                    let config: config::MultisigConfig =
+                        toml::from_str(&fs::read_to_string(config)?)?;
+                    let config::MultisigConfig {
+                        transaction,
+                        lock,
+                        signatures,
+                    } = config;
+
+                    let mut sigs = Vec::with_capacity(signatures.len());
+                    for s in signatures {
+                        let s = s.into_bytes();
+                        if s.len() != ckb_capsule::tool::multisig::SIGNATURE_SIZE {
+                            return Err(anyhow!(
+                                "expected signature length is {}, but got {}",
+                                ckb_capsule::tool::multisig::SIGNATURE_SIZE,
+                                s.len()
+                            ));
+                        }
+                        let mut sig = [0u8; ckb_capsule::tool::multisig::SIGNATURE_SIZE];
+                        sig.copy_from_slice(&s);
+                        sigs.push(sig);
+                    }
+
+                    let tx: Transaction = transaction.into();
+                    let signed_tx =
+                        multisig::put_signatures_on_multisig_tx(&tx.into_view(), &lock, &sigs)?;
+                    fs::write(output_path, signed_tx.data().as_bytes())?;
+                    println!("Done");
+                }
+
+                ("new-config", Some(args)) => {
+                    let output = args.value_of("output").unwrap();
+                    let config = config::MultisigConfig::default();
+                    let content = toml::to_string_pretty(&config)?;
+                    fs::write(output, content)?;
+                    println!("Done");
+                }
+                (command, _) => {
+                    invalid_command(command);
+                }
+            },
+            ("send-tx", Some(args)) => {
+                let ckb_rpc_url = args.value_of("api").expect("api");
+                let client = ckb_tool::rpc_client::RpcClient::new(ckb_rpc_url);
+                let tx_path = args.value_of("tx").expect("tx path");
+                let raw_tx = fs::read(tx_path)?;
+                let raw_tx = Transaction::new_unchecked(raw_tx.into());
+                let tx_hash = client.send_transaction(raw_tx.into());
+                println!("Sent tx: {}", tx_hash);
+            }
+            (command, _) => {
+                invalid_command(command);
+            }
+        },
         ("debugger", Some(sub_matches)) => match sub_matches.subcommand() {
             ("gen-template", Some(args)) => {
                 let contract = args.value_of("name").expect("contract name");
@@ -380,15 +493,11 @@ fn run_cli() -> Result<()> {
                 )?;
             }
             (command, _) => {
-                eprintln!("unknown debugger subcommand '{}'", command);
-                eprintln!("{}", help_str);
-                exit(1);
+                invalid_command(command);
             }
         },
         (command, _) => {
-            eprintln!("unrecognize command '{}'", command);
-            eprintln!("{}", help_str);
-            exit(1);
+            invalid_command(command);
         }
     }
     Ok(())
