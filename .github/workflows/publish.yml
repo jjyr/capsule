@@ -22,9 +22,9 @@ jobs:
     steps:
     - uses: actions/checkout@v1
     - name: Set RELEASE_VERSION
-      run: echo ::set-env name=RELEASE_VERSION::${GITHUB_REF#refs/*/}
+      run: echo "RELEASE_VERSION=${GITHUB_REF#refs/*/}" >> $GITHUB_ENV
     - name: Set PKG_NAME
-      run: echo ::set-env name=PKG_NAME::capsule_${{ env.RELEASE_VERSION }}_${{ matrix.suffix }}
+      run: echo "PKG_NAME=capsule_${{ RELEASE_VERSION }}_${{ matrix.suffix }}" >> $GITHUB_ENV
     - name: Build
       run: cargo build --release --locked
     - name: Extract signing key
